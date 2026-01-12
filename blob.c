@@ -4,6 +4,16 @@
 #include <string.h>
 #include <unistd.h>
 
+struct sym {
+	char *name;
+	char *value;
+};
+
+FILE *infp;
+FILE *outfp;
+struct sym *syms;
+size_t symssz;
+
 static char *
 base_prefix(int base)
 {
@@ -21,7 +31,7 @@ base_prefix(int base)
 }
 
 static void
-blob_value(char *value_str, int base, FILE *outfp)
+blob_value(char *value_str, int base)
 {
 	unsigned long value;
 	char *end;
@@ -48,7 +58,7 @@ blob_value(char *value_str, int base, FILE *outfp)
 }
 
 static void
-blob_word(char *word, FILE *outfp)
+blob_word(char *word)
 {
 	int base;
 
@@ -61,11 +71,11 @@ blob_word(char *word, FILE *outfp)
 	else
 		base = 10;
 
-	blob_value(base == 10 ? word : word + 2, base, outfp);
+	blob_value(base == 10 ? word : word + 2, base);
 }
 
 static void
-blob_line(char *line, FILE *outfp)
+blob_line(char *line)
 {
 	char *c;
 	char *word = NULL;
@@ -82,7 +92,7 @@ blob_line(char *line, FILE *outfp)
 					break;
 				continue;
 			}
-			blob_word(word, outfp);
+			blob_word(word);
 			free(word);
 			if (!*c)
 				break;
@@ -99,7 +109,102 @@ blob_line(char *line, FILE *outfp)
 }
 
 static void
-blob_file(FILE *infp, FILE *outfp)
+sym_def(char *name, char *value)
+{
+	struct sym *sym;
+	size_t sz;
+
+	syms = realloc(syms, sizeof(*syms) * ++symssz);
+	if (!syms)
+		abort();
+	sym = syms + symssz - 1;
+
+	sz = strlen(name) + 1;
+	sym->name = malloc(sz);
+	if (!sym->name)
+		abort();
+	memcpy(sym->name, name, sz);
+
+	if (value) {
+		sz = strlen(value) + 1;
+		sym->value = malloc(sz);
+		if (!sym->value)
+			abort();
+		memcpy(sym->value, value, sz);
+	}
+}
+
+static void
+eval_ifdef(char *arg)
+{
+	char *c;
+	int argsz;
+	struct sym *sym = NULL;
+
+	for (c = arg; *c && *c == ' '; c++)
+		;
+	if (!*c) {
+		fputs("missing argument for `#ifdef`\n", stderr);
+		exit(1);
+	}
+	arg = c;
+	for (c++; *c && *c != ' '; c++)
+		;
+	argsz = c - arg;
+
+	for (size_t i = 0; i < symssz; i++) {
+		if (strncmp(syms[i].name, arg, argsz))
+			continue;
+		if (strlen(syms[i].name) == argsz) {
+			sym = &syms[i];
+			break;
+		}
+	}
+	fprintf(stderr, "#ifdef %s: %s\n", arg, sym ? "true" : "false");
+}
+
+static void
+eval_pproc(char *dir)
+{
+	char *c;
+	int dirsz = 0;
+
+	for (c = dir; *c && *c != ' '; c++)
+		dirsz++;
+	if (c == dir) {
+		fputs("preprocessor directive ended early\n", stderr);
+		exit(1);
+	}
+
+	fprintf(stderr, "dirsz: %d\n", dirsz);
+	if (dirsz == 5) {
+		if (!memcmp(dir, "ifdef", 5)) {
+			eval_ifdef(dir + 5);
+			return;
+		} else
+			goto bad;
+	}
+
+bad:
+	fputs("bad preprocessor directive\n", stderr);
+	exit(1);
+}
+
+static void
+eval_line(char *line)
+{
+	while (*line && *line == ' ')
+		line++;
+	if (!*line)
+		return;
+	if (*line == '#')
+		eval_pproc(++line);
+	else
+		blob_line(line);
+}
+
+static void
+blob_file(void)
 {
 	int c;
 	char *line = NULL;
@@ -108,7 +213,7 @@ blob_file(FILE *infp, FILE *outfp)
 	while ((c = fgetc(infp)) != EOF) {
 		if (c == '\n') {
 			if (line) {
-				blob_line(line, outfp);
+				eval_line(line);
 				free(line);
 				line = NULL;
 				i = 0;
@@ -128,10 +233,8 @@ main(int argc, char **argv)
 {
 	char *argv0 = *argv;
 	int opt;
-	FILE *infp = NULL;
-	FILE *outfp = NULL;
 
-	while ((opt = getopt(argc, argv, "o:")) != -1) {
+	while ((opt = getopt(argc, argv, "o:D:")) != -1) {
 		switch (opt) {
 		case 'o':
 			outfp = fopen(optarg, "wb");
@@ -140,6 +243,31 @@ main(int argc, char **argv)
 				exit(1);
 			}
 			break;
+		case 'D': {
+			char *c;
+			char *name;
+			char *value;
+
+			name = optarg;
+			for (c = name; *c && *c != '=' && *c != ' '; c++)
+				;
+			if (c == name) {
+				fputs("missing name for macro definition\n", stderr);
+				exit(1);
+			}
+			if (*c == ' ') {
+				fputs("can't have spaces in a macro definition\n", stderr);
+				exit(1);
+			}
+
+			value = c;
+			if (!*value)
+				sym_def(name, NULL);
+			*value = 0;
+			sym_def(name, value + 1);
+
+			break;
+		}
 		default:
 			goto usage;
 		}
@@ -156,7 +284,12 @@ main(int argc, char **argv)
 		argv++;
 	}
 
-	blob_file(infp ? infp : stdin, outfp ? outfp : stdout);
+	if (!infp)
+		infp = stdin;
+	if (!outfp)
+		outfp = stdout;
+
+	blob_file();
 
 	return 0;
 
