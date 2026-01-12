@@ -4,9 +4,6 @@
 #include <string.h>
 #include <unistd.h>
 
-unsigned char *blob;
-size_t blobsz;
-
 static char *
 base_prefix(int base)
 {
@@ -24,7 +21,7 @@ base_prefix(int base)
 }
 
 static void
-blob_value(char *value_str, int base)
+blob_value(char *value_str, int base, FILE *outfp)
 {
 	unsigned long value;
 	char *end;
@@ -44,14 +41,14 @@ blob_value(char *value_str, int base)
 		exit(1);
 	}
 
-	blob = realloc(blob, ++blobsz);
-	if (!blob)
-		abort();
-	blob[blobsz - 1] = value;
+	if (fwrite(&value, 1, 1, outfp) != 1) {
+		perror("can't write output");
+		exit(1);
+	}
 }
 
 static void
-blob_word(char *word)
+blob_word(char *word, FILE *outfp)
 {
 	int base;
 
@@ -64,11 +61,11 @@ blob_word(char *word)
 	else
 		base = 10;
 
-	blob_value(base == 10 ? word : word + 2, base);
+	blob_value(base == 10 ? word : word + 2, base, outfp);
 }
 
 static void
-blob_line(char *line)
+blob_line(char *line, FILE *outfp)
 {
 	char *c;
 	char *word = NULL;
@@ -85,7 +82,7 @@ blob_line(char *line)
 					break;
 				continue;
 			}
-			blob_word(word);
+			blob_word(word, outfp);
 			free(word);
 			if (!*c)
 				break;
@@ -111,7 +108,7 @@ blob_file(FILE *infp, FILE *outfp)
 	while ((c = fgetc(infp)) != EOF) {
 		if (c == '\n') {
 			if (line) {
-				blob_line(line);
+				blob_line(line, outfp);
 				free(line);
 				line = NULL;
 				i = 0;
@@ -123,11 +120,6 @@ blob_file(FILE *infp, FILE *outfp)
 			abort();
 		line[i++] = c;
 		line[i] = 0;
-	}
-
-	if (fwrite(blob, 1, blobsz, outfp) != blobsz) {
-		perror("can't write output");
-		exit(1);
 	}
 }
 
