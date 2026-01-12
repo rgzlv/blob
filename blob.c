@@ -1,7 +1,8 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
+#include <unistd.h>
 
 unsigned char *blob;
 size_t blobsz;
@@ -100,14 +101,14 @@ blob_line(char *line)
 	}
 }
 
-int
-main(void)
+static void
+blob_file(FILE *infp, FILE *outfp)
 {
 	int c;
 	char *line = NULL;
 	int i = 0;
 
-	while ((c = fgetc(stdin)) != EOF) {
+	while ((c = fgetc(infp)) != EOF) {
 		if (c == '\n') {
 			if (line) {
 				blob_line(line);
@@ -124,10 +125,50 @@ main(void)
 		line[i] = 0;
 	}
 
-	if (fwrite(blob, 1, blobsz, stdout) != blobsz) {
+	if (fwrite(blob, 1, blobsz, outfp) != blobsz) {
 		perror("can't write output");
 		exit(1);
 	}
+}
+
+int
+main(int argc, char **argv)
+{
+	char *argv0 = *argv;
+	int opt;
+	FILE *infp = NULL;
+	FILE *outfp = NULL;
+
+	while ((opt = getopt(argc, argv, "o:")) != -1) {
+		switch (opt) {
+		case 'o':
+			outfp = fopen(optarg, "wb");
+			if (!outfp) {
+				perror(optarg);
+				exit(1);
+			}
+			break;
+		default:
+			goto usage;
+		}
+	}
+	argc -= optind;
+	argv += optind;
+	if (argc) {
+		infp = fopen(*argv, "rb");
+		if (!infp) {
+			perror(*argv);
+			exit(1);
+		}
+		argc--;
+		argv++;
+	}
+
+	blob_file(infp ? infp : stdin, outfp ? outfp : stdout);
 
 	return 0;
+
+usage:
+	fprintf(stderr, "usage: %s [-o out] [in]\n", argv0);
+	return 1;
 }
